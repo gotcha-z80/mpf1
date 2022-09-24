@@ -1,0 +1,16 @@
+This is the disassembled code of the 4K EPROM that originates
+from the FLite Electronics LTD company.
+
+The original EPROM content is located in the EPROM directory
+(Intel Hex and Binary formats)
+It was provided here:
+https://forum.system-cfg.com/viewtopic.php?p=183094#p183094
+
+The HEX-1BP-rs232 version is the desassembled and reassembled version.
+No change was done to the original EPROM code. In particular, the
+code is compiled to be loaded at address 2000h in the MPF1.
+
+This loader supports the link with a RS232 serial port.
+
+The code can be assembled with z80asm (Savannah):
+https://www.nongnu.org/z80asm/

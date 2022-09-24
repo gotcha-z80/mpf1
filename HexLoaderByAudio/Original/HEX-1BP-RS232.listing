@@ -1,0 +1,441 @@
+# File HEX-1BP-RS232.asm
+0000			;=============================================================================== 
+0000			; Code of the HEX-1BP loader from the FLite Electronics LTD company 
+0000			; This loader allows MPF-1B users to load programs (Intel Hex format) 
+0000			; into the MPF-1 system memory from the serial port of a PC (implementing RS232). 
+0000			; The Serial output of the PC is connected to the MPF-1 audio input (EAR) with a 
+0000			; specific cable that connects: 
+0000			; - the TX serial output to the EAR center tip and 
+0000			; - the serial ground to the EAR ground. 
+0000			; 
+0000			; Desassembled by Gotcha 
+0000			;=============================================================================== 
+0000			 
+0000			;  Address of used monitor routines 
+0000			monitorReset:	equ 0000h	; Reset 
+0000			monitorTone:	equ 05E4h	; Generate sound 
+0000			monitorScan:	equ 05FEh	; Scan keyboard and display until a new key-in 
+0000			monitorScan1:	equ 0624h 	; Scan keyboard and display one cycle 
+0000			monitorAddrDp:	equ 0665h 
+0000			 
+0000			; Address of used monitor variables 
+0000			monitorDISPBF:	equ 1FB6h 
+0000			 
+0000			; Variables 
+0000				ORG 1F70h 
+1f70			varCRC:			equ 1F70h	; Used to compute the checksum 
+1f70			varNumBytesInLine:	equ 1F71h	; num bytes in the hex record 
+1f70			varDataPtr:		equ 1F72h	; address of the load destination 
+1f70			varOffset:		equ 1F74h	; offset to add to the Intel Hex address 
+1f70								; to get the actual target address in memory 
+1f70			varSound:		equ 1F76h	; Sound (beeper) configuration 
+1f70			 
+1f70			 
+1f70			; IO addresses 
+1f70			io_8255_port_A:	 equ 0000h 
+1f70			io_8255_port_B:	 equ 0001h 
+1f70			io_8255_port_C:	 equ 0002h 
+1f70			 
+1f70			;------------------ 
+1f70			; Code 
+1f70			;------------------ 
+1f70			 
+1f70				ORG 2000h 
+2000 dd 21 53 21		LD          IX,displayOffset 
+2004 11 00 00			LD          DE,0x0 
+2007 ed 53 74 1f		LD          (varOffset),DE 
+200b cd fe 05			CALL        monitorScan			; Display "Offset" & wait for key 
+200e cd 90 21			CALL        emit_sound1 
+2011 fe 10			CP          0x10 
+2013 30 07			JR          NC,startSoundStage		; Jump if pressed key is not hexa 
+2015									; (no address given by the user) 
+2015 cd 67 21			CALL        getAddrFromKeybd 
+2018 ed 53 74 1f		LD          (varOffset),DE		; Store the user given offset 
+201c			startSoundStage: 
+201c dd 21 59 21		LD          IX,displaySound 
+2020 cd fe 05			CALL        monitorScan			; Display "Sound" & wait for key 
+2023 21 76 1f			LD          HL,varSound 
+2026 36 7f			LD          (HL),0x7f			; Config for port C of 8255: 
+2028									; Speaker & LED tone-out = 0 
+2028			                                		; --> Sound deactivated 
+2028 fe 12			CP          0x12			; Key 'GO' was pressed ? 
+202a 28 02			JR          Z,startSendStage 
+202c 36 ff			LD          (HL),0xff			; Config for port C of 8255: 
+202e									; Speaker & LED tone-out = 1 
+202e									; --> Sound activated 
+202e			startSendStage: 
+202e dd 21 3b 21		LD          IX,displaySend 
+2032 06 64			LD          B,0x64 
+2034 cd 5f 21			CALL        displayAndLoopBTimes	; Delay of 1s 
+2037 cd 99 21			CALL        emit_sound2 
+203a 3e 40			LD          A,0x40 
+203c d3 01			OUT         (io_8255_port_B),A		; Configure '.' to print on display 
+203e 3e ff			LD          A,0xff 
+2040 d3 02			OUT         (io_8255_port_C),A		; Print '.' on the display 6 digits 
+2042			 
+2042			waitForColon: 
+2042 cd 0d 21			CALL        readCharFromTape 
+2045 fe 3a			CP          0x3a			; Did we get ':' ? 
+2047 20 f9			JR          NZ,waitForColon 
+2049			 
+2049			getNumBytes: 
+2049 af				XOR         A 
+204a 32 70 1f			LD          (varCRC),A 
+204d cd e0 20			CALL        getByteFromTape 
+2050 32 71 1f			LD          (varNumBytesInLine),A 
+2053 cd d6 20			CALL        addAToCRC 
+2056 fe 00			CP          0x0 
+2058 ca b9 20			JP          Z,theEndGood 
+205b			 
+205b			getDestAddr: 
+205b cd e0 20			CALL        getByteFromTape		; Address higher order byte 
+205e cd d6 20			CALL        addAToCRC 
+2061 57				LD          D,A 
+2062 cd e0 20			CALL        getByteFromTape		; Address lower order byte 
+2065 cd d6 20			CALL        addAToCRC 
+2068 5f				LD          E,A 
+2069 2a 74 1f			LD          HL,(varOffset) 
+206c 19				ADD         HL,DE 
+206d 22 72 1f			LD          (varDataPtr),HL 
+2070 cd e0 20			CALL        getByteFromTape		; Type of Intel Hex record 
+2073 cd d6 20			CALL        addAToCRC 
+2076 fe 00			CP          0x0				; Only supports record type of 0 
+2078 28 0f			JR          Z,getData 
+207a			 
+207a			errorRecord: 
+207a cd a2 21			CALL        emit_sound3 
+207d dd 21 41 21		LD          IX,displayRecord 
+2081 06 64			LD          B,0x64 
+2083 cd 5f 21			CALL        displayAndLoopBTimes	; Delay : 100 iterations 
+2086 c3 2e 20			JP          startSendStage 
+2089			 
+2089			getData: 
+2089 3a 71 1f			LD          A,(varNumBytesInLine) 
+208c 47				LD          B,A 
+208d dd 2a 72 1f		LD          IX,(varDataPtr) 
+2091			 
+2091			dataGetLoop: 
+2091 cd e0 20			CALL        getByteFromTape 
+2094 dd 77 00			LD          (IX+0x0),A			; Store the read byte in memory 
+2097 cd d6 20			CALL        addAToCRC			; Compute the CRC 
+209a dd 23			INC         IX 
+209c 10 f3			DJNZ        dataGetLoop 
+209e			 
+209e			checkCRC: 
+209e cd e0 20			CALL        getByteFromTape 
+20a1 21 70 1f			LD          HL,varCRC 
+20a4 86				ADD         A,(HL) 
+20a5 28 0f			JR          Z,getNextRecord 
+20a7			 
+20a7			errorCRC: 
+20a7 cd a2 21			CALL        emit_sound3 
+20aa dd 21 47 21		LD          IX,displayChecksum 
+20ae 06 64			LD          B,0x64 
+20b0 cd 5f 21			CALL        displayAndLoopBTimes	; Delay: 100 iterations 
+20b3 c3 2e 20			JP          startSendStage 
+20b6			 
+20b6			getNextRecord: 
+20b6 c3 42 20			JP          waitForColon 
+20b9			 
+20b9			theEndGood: 
+20b9 cd ab 21			CALL        emit_sound4 
+20bc dd 21 4d 21		LD          IX,displayGood 
+20c0 06 64			LD          B,0x64 
+20c2 cd 5f 21			CALL        displayAndLoopBTimes	; Delay: 100 iterations 
+20c5 c3 00 00			JP          monitorReset		; Back to monitor 
+20c8			 
+20c8			        ;*************************************** 
+20c8			        ;***        end of program           *** 
+20c8				;*************************************** 
+20c8			 
+20c8			 
+20c8			;************************************************************************************************ 
+20c8			;* triggersSoundAndTempoD: 
+20c8			;* 
+20c8			;* Beep and turn the tone-out LED if configured in varSound 
+20c8			;* Loop D times as a delay. 
+20c8			;************************************************************************************************ 
+20c8			 
+20c8			triggersSoundAndTempoD: 
+20c8 f5				PUSH        AF 
+20c9 e5				PUSH        HL 
+20ca 21 76 1f			LD          HL,varSound 
+20cd a6				AND         (HL) 
+20ce d3 02			OUT         (io_8255_port_C),A	; Beep if configured 
+20d0			delay_: 
+20d0 15				DEC         D 
+20d1 20 fd			JR          NZ,delay_ 
+20d3 e1				POP         HL 
+20d4 f1				POP         AF 
+20d5 c9				RET 
+20d6			 
+20d6			;************************************************************************************************ 
+20d6			;* addAToCRC: 
+20d6			;* 
+20d6			;* Add A to the variable that keps the CRC value 
+20d6			;************************************************************************************************ 
+20d6			 
+20d6			addAToCRC: 
+20d6 f5				PUSH        AF 
+20d7 e5				PUSH        HL 
+20d8 21 70 1f			LD          HL,varCRC 
+20db 86				ADD         A,(HL) 
+20dc 77				LD          (HL),A 
+20dd e1				POP         HL 
+20de f1				POP         AF 
+20df c9				RET 
+20e0			 
+20e0			;************************************************************************************************ 
+20e0			;* getByteFromTape: 
+20e0			;* 
+20e0			;* Read 2 ASCII characters (representing an hexadecimal byte) from the audio input and return 
+20e0			;* the corresponding integer value byte in A. 
+20e0			;************************************************************************************************ 
+20e0			 
+20e0			getByteFromTape: 
+20e0 cd e7 20			CALL        readAsciiByteIntoHL 
+20e3 cd f0 20			CALL        getByteValueFromHexAscii 
+20e6 c9				RET 
+20e7			 
+20e7			 
+20e7			;************************************************************************************************ 
+20e7			;* readAsciiByteIntoHL: 
+20e7			;* 
+20e7			;* Read 2 ASCII characters from the audio input and return their ASCII code in HL 
+20e7			;*  - H (1st) 
+20e7			;*  - L (2nd) 
+20e7			;************************************************************************************************ 
+20e7			 
+20e7			readAsciiByteIntoHL: 
+20e7 cd 0d 21			CALL        readCharFromTape 
+20ea 67				LD          H,A 
+20eb cd 0d 21			CALL        readCharFromTape 
+20ee 6f				LD          L,A 
+20ef c9				RET 
+20f0			 
+20f0			 
+20f0			;************************************************************************************************ 
+20f0			;* getByteValueFromHexAscii: 
+20f0			;* 
+20f0			;* Take 2 ASCII characters that represent a byte in Hexa (2 nibbles in HL) and return the 
+20f0			;* corresponding integer value byte in A 
+20f0			;************************************************************************************************ 
+20f0			 
+20f0			getByteValueFromHexAscii: 
+20f0 7d				LD          A,L 
+20f1 cd 03 21			CALL        getHexaValueFromASCII	; LSB 
+20f4 4f				LD          C,A 
+20f5 7c				LD          A,H 
+20f6 cd 03 21			CALL        getHexaValueFromASCII	; MSB 
+20f9 cb 27			SLA         A 
+20fb cb 27			SLA         A 
+20fd cb 27			SLA         A 
+20ff cb 27			SLA         A 
+2101 b1				OR          C 
+2102 c9				RET 
+2103			 
+2103			;************************************************************************************************ 
+2103			;* getHexaValueFromASCII: 
+2103			;* 
+2103			;* Compute the integer value of an ASCII character representing a hexa nibble (4 bits). 
+2103			;*  - In: A = ASCII code of the nibble 
+2103			;*  - out: A = integer value of the nibble 
+2103			;************************************************************************************************ 
+2103			 
+2103			getHexaValueFromASCII: 
+2103 fe 3a			CP          0x3a 
+2105 30 03			JR          NC,isLetter 
+2107			 
+2107			isNumber: 
+2107 d6 30			SUB         0x30		; A = valeur du chiffre decimal 
+2109 c9				RET 
+210a			 
+210a			isLetter: 
+210a d6 37			SUB         0x37		; A = valeur de la lettre Hexa 
+210c								; (elle doit etre en majuscule) 
+210c c9				RET 
+210d			 
+210d			;************************************************************************************************ 
+210d			;* readCharFromTape: 
+210d			;* 
+210d			;* Read a 7 bits ASCII character from the audio input 
+210d			;* Return its ASCII code in A 
+210d			;************************************************************************************************ 
+210d			 
+210d			readCharFromTape: 
+210d c5				PUSH        BC 
+210e d5				PUSH        DE 
+210f 0e 00			LD          C,0x0 
+2111 06 08			LD          B,0x8 			; We will read 8 bits after the start bit 
+2113			 
+2113			waitForTapeInputLow: 
+2113 db 00			IN          A,(io_8255_port_A)		; Potentially wait for the completion of the 
+2115									; previous character 
+2115 cb 7f			BIT         0x7,A 
+2117 20 fa			JR          NZ,waitForTapeInputLow 
+2119			 
+2119			waitForTapeInputHigh: 
+2119 db 00			IN          A,(io_8255_port_A)		; Wait for start bit 
+211b cb 7f			BIT         0x7,A 
+211d 28 fa			JR          Z,waitForTapeInputHigh 
+211f 16 35			LD          D,0x35 
+2121 cd c8 20			CALL        triggersSoundAndTempoD	; Delay of 53 iterations 
+2124									; to check: wait until the middle of the next bit transmission 
+2124									; ??? ms 
+2124			 
+2124			getNotBitFromTape: 
+2124 af				XOR         A				; Flag C=0 
+2125 db 00			IN          A,(io_8255_port_A) 
+2127 cb 7f			BIT         0x7,A			; Flag Z = inverse of bit read from audio input 
+2129 20 01			JR          NZ,insertBit		; Flag C=0 if Z==0 (when read bit==1) 
+212b 37				SCF					; Flag C=1 if Z==1 (when read bit==0) 
+212c			 
+212c			insertBit: 
+212c cb 19			RR          C				; Rotate right C and inject C as most significant bit 
+212e 16 24			LD          D,0x24 
+2130 cd c8 20			CALL        triggersSoundAndTempoD	; Wait for 36 iterations (next bit) 
+2133									; ??? ms 
+2133 10 ef			DJNZ        getNotBitFromTape 
+2135 cb b9			RES         0x7,C			; Reset the last received bit (parity of stop bit) 
+2137 79				LD          A,C 
+2138 d1				POP         DE 
+2139 c1				POP         BC 
+213a c9				RET 
+213b			 
+213b			displaySend: 
+213b 00				defb           00h	 ;' ' 
+213c 00				defb           00h       ;' ' 
+213d b3				defb           0B3h      ;'d' 
+213e 23				defb           23h       ;'n' 
+213f 8f				defb           8Fh       ;'E' 
+2140 ae				defb           0AEh      ;'S' 
+2141			displayRecord: 
+2141 b3				defb           0B3h      ;'d' 
+2142 03				defb           03h       ;'r' 
+2143 a3				defb           0A3h      ;'o' 
+2144 83				defb           83h       ;'c' 
+2145 8f				defb           8Fh       ;'E' 
+2146 03				defb           03h       ;'r' 
+2147			displayChecksum: 
+2147 b5				defb           0B5h      ;'U' 
+2148 ae				defb           0AEh      ;'S' 
+2149 8d				defb           8Dh       ;'C' 
+214a 8f				defb           8Fh       ;'E' 
+214b 37				defb           37h       ;'H' 
+214c 8d				defb           8Dh       ;'C' 
+214d			displayGood: 
+214d 00				defb           00h       ;' ' 
+214e 00				defb           00h       ;' ' 
+214f b3				defb           0B3h      ;'d' 
+2150 a3				defb           0A3h      ;'o' 
+2151 a3				defb           0A3h      ;'o' 
+2152 ad				defb           0ADh      ;'G' 
+2153			displayOffset: 
+2153 87				defb           87h       ;'t' 
+2154 8f				defb           8Fh       ;'E' 
+2155 ae				defb           0AEh      ;'S' 
+2156 0f				defb           0Fh       ;'F' 
+2157 0f				defb           0Fh       ;'F' 
+2158 bd				defb           0BDh      ;'O' 
+2159			displaySound: 
+2159 00				defb           00h       ;' ' 
+215a b3				defb           0B3h      ;'d' 
+215b 23				defb           23h       ;'n' 
+215c a1				defb           0A1h      ;'u' 
+215d a3				defb           0A3h      ;'o' 
+215e ae				defb           0AEh      ;'S' 
+215f			 
+215f			displayAndLoopBTimes: 
+215f c5				PUSH        BC 
+2160 cd 24 06			CALL        monitorScan1 
+2163 c1				POP         BC 
+2164 10 f9			DJNZ        displayAndLoopBTimes 
+2166 c9				RET 
+2167			 
+2167			;************************************************************************************************ 
+2167			;* getAddrFromKeybd: 
+2167			;* 
+2167			;* Function that read a 16 bit address from the keyboard 
+2167			;* 
+2167			;* The function prints digits on the display as their are entered by the user 
+2167			;* If the user enters more than 4 digit, then only the last 4 are kept. 
+2167			;* 
+2167			;* The function returns as soon as the user pushed a key that is not an hexa digit 
+2167			;* - Input: 
+2167			;*   A: value of the first digit key pressed 
+2167			;* - Output 
+2167			;*   DE: the 2 bytes of the collected address 
+2167			;************************************************************************************************ 
+2167			 
+2167			getAddrFromKeybd: 
+2167 dd 21 b6 1f		LD          IX,monitorDISPBF			; @ of the monitor display buffer (6 bytes) 
+216b 11 00 00			LD          DE,0x0 
+216e ed 53 b6 1f		LD          (monitorDISPBF),DE 
+2172			 
+2172			nextKey: 
+2172 cd 83 21			CALL        shiftL_DE_insert_A_4bits		; Insert the digit of the last key pressed in DE 
+2175 cd 65 06			CALL        monitorAddrDp			; Convert DE (4 nibbles) for the display 
+2178 cd fe 05			CALL        monitorScan 
+217b cd 90 21			CALL        emit_sound1 
+217e fe 10			CP          0x10 
+2180 d0				RET         NC 
+2181 18 ef			JR          nextKey 
+2183			 
+2183			 
+2183			shiftL_DE_insert_A_4bits: 
+2183 06 04			LD          B,0x4 
+2185			 
+2185			shift_DE_and_decrement_B: 
+2185 cb 23			SLA         E					; DE = DE << 1 
+2187 cb 12			RL          D 
+2189 10 fa			DJNZ        shift_DE_and_decrement_B		; DE = DE << 1 
+218b			 
+218b e6 0f			AND         0xf 
+218d b3				OR          E 
+218e 5f				LD          E,A 
+218f c9				RET 
+2190			 
+2190			;********************************************************* 
+2190			;* Sound functions 
+2190			;* TODO: determine the frequency 
+2190			;********************************************************* 
+2190			 
+2190			emit_sound1: 
+2190 c5				PUSH        BC 
+2191 e5				PUSH        HL 
+2192 0e 1e			LD          C,0x1e 
+2194 21 c8 00			LD          HL,0xc8 
+2197 18 1b			JR          call_tone_and_return 
+2199			 
+2199			emit_sound2: 
+2199 c5				PUSH        BC 
+219a e5				PUSH        HL 
+219b 0e 46			LD          C,0x46 
+219d 21 90 01			LD          HL,0x190 
+21a0 18 12			JR          call_tone_and_return 
+21a2			 
+21a2			emit_sound3: 
+21a2 c5				PUSH        BC 
+21a3 e5				PUSH        HL 
+21a4 0e c8			LD          C,0xc8 
+21a6 21 20 03			LD          HL,0x320 
+21a9 18 09			JR          call_tone_and_return 
+21ab			 
+21ab			emit_sound4: 
+21ab c5				PUSH        BC 
+21ac e5				PUSH        HL 
+21ad 0e 32			LD          C,0x32 
+21af 21 58 02			LD          HL,0x258 
+21b2 18 00			JR          call_tone_and_return 
+21b4			 
+21b4			call_tone_and_return: 
+21b4 f5				PUSH        AF 
+21b5 d5				PUSH        DE 
+21b6 cd e4 05			CALL        monitorTone 
+21b9 d1				POP         DE 
+21ba f1				POP         AF 
+21bb e1				POP         HL 
+21bc c1				POP         BC 
+21bd c9				RET 
+# End of file HEX-1BP-RS232.asm
+21be
