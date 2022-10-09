@@ -1,0 +1,21 @@
+# File mpf1-helpus.asm
+0000				org 1800h 
+1800 dd 21 20 18	start:	ld ix,help 
+1804 cd fe 05		disp:	call scan 
+1807 fe 13			cp 13h			; KEY-STEP 
+1809 20 f9			jr nz,disp 
+180b 76				halt 
+180c			 
+180c				org 1820h 
+1820			help:	seek help-start 
+1820 ae				defb 0aeh  		; 'S' 
+1821 b5				defb 0b5h		; 'U' 
+1822 1f				defb 01fh		; 'P' 
+1823 85				defb 085h		; 'L' 
+1824 8f				defb 08fh		; 'E' 
+1825 37				defb 037h		; 'H' 
+1826			 
+1826			scan:	equ 05feh 
+1826				 
+# End of file mpf1-helpus.asm
+1826
